@@ -1,0 +1,103 @@
+import bpy
+from mathutils import *; from math import *
+import numpy as np
+
+# 用于存储顶点法线信息的字典
+dict = {}
+
+# 获取名为'Mesh_Name'的网格对象
+mesh = bpy.data.meshes['Mesh_Name']
+
+# 计算网格的切线信息，使用名为'UVMap'的UV层
+mesh.calc_tangents(uvmap='UVMap')
+
+def included_angle(v0, v1):
+    """计算两个向量之间的夹角"""
+    return np.arccos(v0.dot(v1)/(v0.length * v1.length))
+
+def unitVectorToOct(v):
+    """将单位向量转换为八面体映射坐标"""
+    d = abs(v.x) + abs(v.y) + abs(v.z)
+    o = Vector((v.x / d, v.y / d))
+    if v.z <= 0:
+        o.x = (1 - abs(o.y)) * (1 if o.x >= 0 else -1)
+        o.y = (1 - abs(o.x)) * (1 if o.y >= 0 else -1)
+    return o
+
+# 初始化字典，为每个顶点创建空列表
+for vertex in mesh.vertices:
+    dict[str(vertex.co)] = []
+    
+# 遍历所有多边形，计算每个面的法线
+for poly in mesh.polygons:
+    # 获取当前面的三个顶点
+    l0 = mesh.loops[poly.loop_start]
+    l1 = mesh.loops[poly.loop_start + 1]
+    l2 = mesh.loops[poly.loop_start + 2]
+    
+    # 获取顶点坐标
+    v0 = mesh.vertices[l0.vertex_index]
+    v1 = mesh.vertices[l1.vertex_index]
+    v2 = mesh.vertices[l2.vertex_index]
+    
+    # 计算两个边向量
+    vec0 = v1.co - v0.co
+    vec1 = v2.co - v0.co
+    
+    # 计算并归一化法线
+    n = vec0.cross(vec1)
+    n = n.normalized()
+
+    # 将顶点坐标转换为字符串作为字典键
+    k0 = str(v0.co)
+    k1 = str(v1.co)
+    k2 = str(v2.co)
+
+    # 为每个顶点存储法线信息和权重
+    if k0 in dict:
+        w = included_angle(v2.co - v0.co, v1.co - v0.co)
+        dict[k0].append({"n": n, "w": w})
+    if k1 in dict:
+        w = included_angle(v0.co - v1.co, v2.co - v1.co)
+        dict[k1].append({"n": n, "w": w})
+    if k2 in dict:
+        w = included_angle(v1.co - v2.co, v0.co - v2.co)
+        dict[k2].append({"n": n,"w":w})
+        
+# 计算平滑法线并存储到UV贴图中
+for poly in mesh.polygons:
+    for loop_index in range(poly.loop_start, poly.loop_start + 3):
+        l = mesh.loops[loop_index]
+        vertex_index = l.vertex_index
+        v = mesh.vertices[vertex_index]
+        smoothNormal = Vector((0,0,0))
+        weightSum = 0
+        k = str(v.co)
+        if k in dict:
+            a = dict[k]
+            for d in a:
+                n = d['n']
+                w = d['w']
+                smoothNormal += n * w
+                weightSum += w
+        if smoothNormal.length != 0:
+            smoothNormal /= weightSum
+            smoothNormal = smoothNormal.normalized()
+        else:
+            smoothNormal = l.normal
+            
+        # 获取法线、切线和副切线
+        normal = l.normal
+        tangent = l.tangent
+        bitangent = l.bitangent
+
+        # 计算法线在切线空间中的坐标
+        x = tangent.dot(smoothNormal)
+        y = bitangent.dot(smoothNormal)
+        z = normal.dot(smoothNormal)
+        
+        # 获取OutlineUV层的UV坐标
+        uv1 = mesh.uv_layers['OutlineUV'].uv[loop_index]
+        
+        # 将法线信息编码到UV中
+        uv1.vector = unitVectorToOct(Vector((x,y,z)))
